@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pubmed-toolkit"
+version = "0.2.0"
+description = "Author-disambiguated PubMed harvesting and bidirectional reference verification"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = [
+    "pubmed", "crossref", "bibliography", "citation-verification",
+    "author-disambiguation", "open-access", "orcid", "bibtex",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Text Processing :: Markup :: LaTeX",
+]
+# `verify` needs nothing beyond the standard library. Only `fetch` reaches the
+# network with requests, so that is the sole hard dependency.
+dependencies = [
+    "requests>=2.32.3,<3",
+]
+
+[project.optional-dependencies]
+# PyMuPDF is AGPL-3.0 (or commercial). This project is MIT, so it is not a hard
+# dependency: installing it must be the user's deliberate choice rather than
+# something an MIT-licensed package pulls in silently. `fetch` still runs
+# without it, but PDF identity validation is skipped and warns loudly.
+fetch = [
+    "PyMuPDF>=1.23.0",
+    "openpyxl>=3.1.0",
+]
+analysis = [
+    "pandas>=2.0.0",
+    "matplotlib>=3.7.0",
+    "numpy>=1.24.0",
+    "openpyxl>=3.1.0",
+]
+all = [
+    "PyMuPDF>=1.23.0",
+    "openpyxl>=3.1.0",
+    "pandas>=2.0.0",
+    "matplotlib>=3.7.0",
+    "numpy>=1.24.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/AschoofAlpha/pubmed-toolkit"
+Issues = "https://github.com/AschoofAlpha/pubmed-toolkit/issues"
+
+[project.scripts]
+pubmed-toolkit = "pubmed_toolkit.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pubmed_toolkit*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]

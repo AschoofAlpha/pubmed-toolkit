@@ -1,0 +1,55 @@
+{
+  "_comment": "Copy to config.json and edit. config.json is gitignored.",
+
+  "author_name": "Jane Doe",
+  "affiliation": "Example Medical University",
+
+  "_comment_credentials": "Both optional but strongly recommended. An NCBI API key raises the Entrez rate limit from 3 to 10 requests/second (https://ncbiinsights.ncbi.nlm.nih.gov/2017/11/02/new-api-keys-for-the-e-utilities/). The email is required by Unpaywall and puts CrossRef and NCBI requests in their polite pools. Prefer the PUBMED_API_KEY and UNPAYWALL_EMAIL environment variables if you would rather not keep them in a file.",
+  "api_key": "",
+  "email": "you@example.com",
+
+  "years_back": 5,
+
+  "_comment_retmax": "Maximum PMIDs fetched from one search. The author query is deliberately broad (it wildcards the initials, because PubMed always indexes 'Surname Initials' but only sometimes indexes 'Surname Forename'), so a common surname can match thousands. If the hit count exceeds this, the tool warns and - when affiliation_keywords are set - narrows the query server-side rather than silently truncating.",
+  "retmax": 500,
+
+  "output_dir": "pubmed_results",
+  "pdf_dir": "pubmed_results/pdfs",
+  "cache_db": "pubmed_results/paper_cache.db",
+  "download_pdfs": true,
+  "max_workers": 4,
+  "delay_seconds": 0.15,
+  "log_level": "INFO",
+  "proxy_list": [],
+
+  "_comment_identity": "Author disambiguation. This is what stops a search for a common name from returning several different researchers' papers. A name match must additionally satisfy one of: ORCID, email domain, or an affiliation keyword. List every way the institution is written in PubMed affiliation strings, including abbreviations, affiliated hospitals and translated forms - PubMed does not normalise these.",
+  "author_identity": {
+    "affiliation_keywords": [
+      "Example Medical University",
+      "Example Med Univ",
+      "EMU",
+      "Affiliated Hospital of Example Medical University",
+      "Example Union Hospital",
+      "Example Provincial Hospital",
+      "Example Key Laboratory"
+    ],
+    "email_domains": [
+      "@example.edu",
+      "@mail.example.edu"
+    ],
+    "_comment_orcid": "Strongest signal available. If you know the target researcher's ORCID, fill it in - it alone resolves most ambiguity.",
+    "orcid": "",
+
+    "_comment_require": "true = strict. A name match that satisfies none of the three checks is rejected. Set false to keep every name match (only sensible for genuinely rare names).",
+    "require_affiliation": true
+  },
+
+  "_comment_advisor": "Read only by the `profile` subcommand; both keys are optional and these are the defaults. The profile report refuses to run unless author_identity above carries at least one of orcid / affiliation_keywords / email_domains, because without them the corpus blends several same-named people and every count in the report is about more than one person.",
+  "advisor": {
+    "_comment_exclude_names": "Co-authors to drop from the roster, written exactly as PubMed indexes them ('Surname Forename'). Intended for a co-PI, a department head or a long-term collaborator who appears on everything and would otherwise be counted as a member of this lab. Matching is case-insensitive and exact - it is not a keyword search.",
+    "exclude_names": [],
+
+    "_comment_lag_years": "How long someone must have been publishing before 'no first-author paper yet' means anything. Below this, they are reported as too recent to tell rather than as having never led a paper, so a lab that just expanded does not read as one that withholds first authorship.",
+    "lag_years": 3
+  }
+}

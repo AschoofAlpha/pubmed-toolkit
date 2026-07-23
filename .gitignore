@@ -1,0 +1,31 @@
+# Local configuration — may contain API keys and a personal contact email
+config.json
+.env
+
+# Run output. These directories hold downloaded PDFs, which are copyrighted
+# works, plus bibliometric data about named individuals. Never commit them.
+pubmed_results/
+verify_results/
+*.log
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Agent tooling
+.claude/
