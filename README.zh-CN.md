@@ -62,10 +62,13 @@ cd pubmed-toolkit
 
 pip install -e ".[fetch]"         # profile + fetch：PDF 下载与身份校验
 pip install -e ".[analysis]"      # + `analyze` 子命令的位图图表（matplotlib）
-pip install -e .                  # 仅 verify —— 无任何第三方依赖
+pip install -e .                  # 仅 verify —— 自身只 import 标准库
 ```
 
 需要 Python 3.10+。**未发布到 PyPI**，请从源码安装。
+
+`requests` 是本包的硬依赖，任何一种装法都会把它装上——上面那句说的是
+`verify` 自身 import 什么，不是 pip 会往你环境里装什么。
 
 语料就绪之后，`profile` 只用标准库，**图表也不例外**：HTML 报告里每一张图
 都是 Python 直接生成、原样写进文件的 SVG 字符串。**`profile` 完全不用

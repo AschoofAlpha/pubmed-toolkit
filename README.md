@@ -78,10 +78,12 @@ cd pubmed-toolkit
 
 pip install -e ".[fetch]"         # profile + fetch: PDF download and identity validation
 pip install -e ".[analysis]"      # + the `analyze` subcommand's raster charts (matplotlib)
-pip install -e .                  # verify only — no third-party dependencies
+pip install -e .                  # verify only — imports nothing beyond the stdlib
 ```
 
 Python 3.10+. Not published on PyPI; install from source.
+
+`requests` is a hard dependency of the package, so any install pulls it in — the note above is about what `verify` itself imports, not about what pip puts in your environment.
 
 `profile` needs nothing beyond the standard library once a corpus exists,
 including its figures: every chart in the HTML report is an SVG string generated

@@ -52,7 +52,7 @@ def setup_logging(output_dir: str, level: str = "INFO"):
 
 def parse_fetch_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="run.py [fetch]",
+        prog="pubmed-toolkit [fetch]",
         description="PubMed 论文检索与 PDF 下载（默认子命令；可省略 'fetch'）",
     )
     parser.add_argument("--config", help="JSON 配置文件路径（默认自动读取 config.json）")
@@ -72,7 +72,7 @@ def parse_fetch_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def parse_clean_cache_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="run.py clean-cache",
+        prog="pubmed-toolkit clean-cache",
         description="清理 SQLite 缓存里的过期失败记录（下载成功的记录不动）",
     )
     parser.add_argument("--config", help="JSON 配置文件路径（用于读取 cache_db）")
@@ -86,7 +86,7 @@ def parse_clean_cache_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def parse_download_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="run.py download",
+        prog="pubmed-toolkit download",
         description="只跑 PDF 下载阶段：从已有 papers_*.json 读论文清单，跳过 PubMed efetch",
     )
     parser.add_argument("--config", help="JSON 配置文件路径（默认自动读取 config.json）")
@@ -102,7 +102,7 @@ def parse_download_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def parse_analyze_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="run.py analyze",
+        prog="pubmed-toolkit analyze",
         description="基于已有 papers_*.xlsx + pdfs/ 跑作者矩阵 / 甘特 / 主题图",
     )
     parser.add_argument("--config", help="JSON 配置文件路径（用于读取 author_name 作为 PI 名）")
@@ -117,7 +117,7 @@ def parse_analyze_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def parse_profile_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="run.py profile",
+        prog="pubmed-toolkit profile",
         description="从已有 papers_*.json 生成导师画像：发表记录反映出的「当这位 PI 的学生是什么样」",
         epilog="报告不打分、不排名，也没有可调的样本量下限——抑制阈值是规范的一部分，不作为参数暴露。",
     )
