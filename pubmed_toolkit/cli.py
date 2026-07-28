@@ -19,6 +19,7 @@ import logging
 import os
 import sys
 from datetime import datetime
+from typing import Any
 
 from pubmed_toolkit.config import DEFAULT_CONFIG, load_config
 
@@ -232,10 +233,9 @@ def cmd_download(argv: list[str]):
         logger.error("没找到 papers_*.json — 先跑 fetch，或用 --input 指定路径")
         return 1
 
-    import json as _json
-    with open(json_path, encoding="utf-8") as f:
-        papers = _json.load(f)
-    if not isinstance(papers, list) or not papers:
+    from pubmed_toolkit.export import load_papers_json
+    papers, _ = load_papers_json(json_path)
+    if not papers:
         logger.error("输入 JSON 不是论文列表或为空: %s", json_path)
         return 1
 
@@ -332,15 +332,50 @@ def cmd_analyze(argv: list[str]):
     return 0
 
 
-def _profile_corpus(papers: list[dict], cfg: dict) -> dict:
+def _corpus_counts(search: dict) -> dict:
     """
-    Wrap a legacy papers_*.json list in the Section 4 corpus contract.
+    Counts for the provenance block, derived only where both operands exist.
 
-    That file records nothing about the search that produced it, so nothing is
-    invented here: unknown fields stay unset and render as "?" in the provenance
-    block rather than as a confident value.
+    `rejected` is fetched minus verified. Defaulting either side to zero would
+    turn "not recorded" into a confident number, which is the failure this whole
+    provenance change exists to remove.
+    """
+    counts = {k: search[k] for k in ("fetched", "verified") if k in search}
+    if "fetched" in counts and "verified" in counts:
+        counts["rejected"] = counts["fetched"] - counts["verified"]
+    return counts
+
+
+def _profile_corpus(papers: list[dict], cfg: dict, search: dict | None = None) -> dict:
+    """
+    Wrap a papers_*.json list in the Section 4 corpus contract.
+
+    `search` is what `fetch` recorded about the query it actually ran. When it is
+    absent the file predates provenance, and nothing is invented to fill the gap:
+    unknown fields stay unset and render as "?" rather than as a confident value,
+    and the truncation gate reports `unknown` instead of a fabricated `False`.
     """
     identity = cfg.get("author_identity") or {}
+    search = search or {}
+    query: dict[str, Any] = {"years_back": search.get("years_back", cfg.get("years_back", "?"))}
+    if search:
+        query.update({
+            # Key names follow the Section 4 contract that report.py renders from
+            # (`term`, `esearch_count`), not the names search_pubmed happens to use.
+            "term": search.get("esearch_term", ""),
+            "esearch_count": search.get("esearch_matched", "?"),
+            "pmids_returned": search.get("pmids_returned", "?"),
+            "retmax": search.get("retmax", "?"),
+            "mindate": search.get("mindate", "?"),
+            "maxdate": search.get("maxdate", "?"),
+            "narrowed_by_affiliation": search.get("narrowed_by_affiliation", False),
+            "truncated": search.get("truncated", "unknown"),
+        })
+    else:
+        # Truncation is unknowable from a legacy file: it records neither the
+        # esearch hit count nor how many PMIDs came back, so gate G1 cannot run.
+        query["truncated"] = "unknown"
+
     return {
         "schema_version": 1,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -348,12 +383,7 @@ def _profile_corpus(papers: list[dict], cfg: dict) -> dict:
         # corpus the PI's byline position is decided by that filter rather than by
         # the data. Section 7.7 suppresses the metric on the strength of this flag.
         "position_filtered": True,
-        "query": {
-            "years_back": cfg.get("years_back", "?"),
-            # Truncation is unknowable from a legacy file: it records neither the
-            # esearch hit count nor how many PMIDs came back, so gate G1 cannot run.
-            "truncated": "unknown",
-        },
+        "query": query,
         "identity": {
             "author_name": cfg.get("author_name", ""),
             "orcid": (identity.get("orcid") or "").strip(),
@@ -364,7 +394,7 @@ def _profile_corpus(papers: list[dict], cfg: dict) -> dict:
             # sets False. The default here must match the function, not the config.
             "require_affiliation_effective": bool(identity.get("require_affiliation", True)),
         },
-        "counts": {},
+        "counts": _corpus_counts(search),
         # cmd_fetch stamps every paper "待确认" when nothing passed verification and
         # it kept the whole result set. That stamp is the only surviving trace of
         # the condition gate G2 refuses on.
@@ -426,12 +456,15 @@ def _build_profile_report(json_path: str, cfg: dict, output_dir: str, logger: lo
     with open(json_path, encoding="utf-8") as f:
         data = _json.load(f)
 
-    if isinstance(data, dict):
+    if isinstance(data, dict) and "search" in data:
+        # fetch envelope: the search actually recorded what it did, so G1 is decidable.
+        corpus = _profile_corpus(data.get("papers") or [], cfg, data["search"])
+    elif isinstance(data, dict):
         corpus = data  # already written in the Section 4 corpus shape
     elif isinstance(data, list) and data:
         logger.warning(
-            "papers_*.json 不记录检索式与命中数，provenance 的 query 块按当前 config 重建，"
-            "截断门禁 G1 因此无法判定。"
+            "这份 papers_*.json 是旧格式，不含检索式与命中数，provenance 的 query 块"
+            "按当前 config 重建，截断门禁 G1 因此无法判定。重跑 fetch 可消除此限制。"
         )
         corpus = _profile_corpus(data, cfg)
     else:
@@ -535,9 +568,14 @@ def cmd_fetch(argv: list[str]):
 
     # Step 1: 搜索。把身份配置一并传入 —— ORCID 可直接作为检索项，
     # 机构关键词在结果超出 retmax 时用于服务端收窄。
+    # Collected here and written into papers_*.json so the profile report can
+    # decide the truncation gate from what the search actually did, rather than
+    # rebuilding a guess from the config it happens to be run with later.
+    search_provenance: dict = {}
     pmids = search_pubmed(
         cfg["author_name"], cfg["years_back"], cfg["api_key"],
         retmax=cfg.get("retmax", 500), identity=identity_cfg,
+        provenance=search_provenance,
     )
     if not pmids:
         logger.warning("未找到任何论文，请检查作者名拼写。")
@@ -613,7 +651,9 @@ def cmd_fetch(argv: list[str]):
 
     # 同步导出 JSON（供 analyze / download 子命令复用作者完整信息）
     json_path = os.path.join(cfg["output_dir"], f"papers_{timestamp}.json")
-    save_to_json(matched_papers, json_path)
+    search_provenance["fetched"] = len(all_papers)
+    search_provenance["verified"] = len(matched_papers)
+    save_to_json(matched_papers, json_path, provenance=search_provenance)
     logger.debug("Papers JSON: %s", json_path)
 
     # PDF 下载结果与身份校验汇总报告

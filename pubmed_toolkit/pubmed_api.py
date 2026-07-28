@@ -95,6 +95,7 @@ def search_pubmed(
     api_key: str,
     retmax: int = 500,
     identity: dict | None = None,
+    provenance: dict | None = None,
 ) -> list[str]:
     """
     搜索 PubMed，返回 PMID 列表。
@@ -106,6 +107,11 @@ def search_pubmed(
       2. 命中数在 retmax 以内 → 直接用宽检索式，召回最大化
       3. 超出且配置了机构关键词 → 加机构条件收窄，并明确告知用户
       4. 仍然超出 → 大声告警，绝不静默丢数据
+
+    `provenance` 是可选的输出参数：传一个 dict 进来，检索的实际参数与命中数会
+    写进去。这些量本来只存在于本函数内部，随日志一起消失，于是下游的画像报告
+    无从判断语料是否被截断——它只能把 G1 门禁标成 `unknown`，也就是一个永远
+    不会触发的门禁。用可选参数而不是改返回值，是为了不动现有调用方。
     """
     today = datetime.now()
     start_date = today - timedelta(days=years_back * 365)
@@ -133,9 +139,17 @@ def search_pubmed(
             total = len(ids)
         return ids, total
 
+    record = provenance if provenance is not None else {}
+    record.update({
+        "mindate": mindate, "maxdate": maxdate, "years_back": years_back,
+        "retmax": retmax, "narrowed_by_affiliation": False,
+    })
+
     broad = build_search_query(author, orcid=orcid)
     if not broad:
         logger.error("作者名与 ORCID 均为空，无法检索。")
+        record.update({"esearch_term": "", "esearch_matched": 0,
+                       "pmids_returned": 0, "truncated": False})
         return []
 
     _, broad_total = _request(broad, 0)
@@ -150,10 +164,18 @@ def search_pubmed(
             broad_total, retmax, narrowed_total,
         )
         query = narrowed
+        record.update({"narrowed_by_affiliation": True,
+                       "broad_term": broad, "broad_matched": broad_total})
 
     logger.info("搜索 PubMed: %s (%s ~ %s)", query, mindate, maxdate)
     id_list, total = _request(query, retmax)
     logger.info("找到 %d 条结果，获取 %d 个 PMID", total, len(id_list))
+    record.update({
+        "esearch_term": query,
+        "esearch_matched": total,
+        "pmids_returned": len(id_list),
+        "truncated": total > len(id_list),
+    })
 
     # 静默截断会让用户以为「这就是全部」。宁可吵，也不要悄悄丢数据。
     if total > len(id_list):
