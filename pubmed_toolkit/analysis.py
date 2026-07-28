@@ -8,7 +8,6 @@ import json
 import os
 import re
 from collections import Counter, defaultdict
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -292,6 +291,193 @@ def write_author_matrix(author_records_path: str, output_dir: str) -> str:
     return out
 
 
+# --- Activity timeline (docs/profile-visual-spec.md Section 4) ---
+#
+# Geometry is fixed in pixels rather than left to matplotlib's autoscaling. The
+# measured failure this replaces was 1934x21506 px — a 1:11 aspect ratio holding
+# 277 rows, 190 of which carried a single dot. Height is now a stated function of
+# the row count, so it is checkable: `24 * n_rows + chrome`, chrome <= 140.
+GANTT_ROW_PITCH_PX = 24
+GANTT_WIDTH_PX = 1100
+GANTT_DPI = 100  # saved pixels == figsize inches * dpi, so the output size is exact
+GANTT_LEFT_PX = 340  # row labels: name + record count + stratum label
+GANTT_RIGHT_PX = 24
+GANTT_TOP_PX = 76  # title + the three declaration lines
+GANTT_BOTTOM_PX = 64  # year ticks + axis label + legend
+GANTT_CHROME_PX = GANTT_TOP_PX + GANTT_BOTTOM_PX  # 140, the spec's ceiling
+
+
+def _gantt_geometry(n_rows: int) -> dict[str, Any]:
+    """
+    Figure size and axes rectangle for `n_rows` rows, in exact pixels.
+
+    Separated from the drawing so the height rule can be asserted without
+    rendering anything: the defect being fixed here was a size, and a size is
+    only a fix if it is checkable.
+    """
+    height_px = GANTT_ROW_PITCH_PX * n_rows + GANTT_CHROME_PX
+    plot_px = GANTT_ROW_PITCH_PX * n_rows
+    return {
+        "width_px": GANTT_WIDTH_PX,
+        "height_px": height_px,
+        "dpi": GANTT_DPI,
+        "figsize": (GANTT_WIDTH_PX / GANTT_DPI, height_px / GANTT_DPI),
+        "rect": (
+            GANTT_LEFT_PX / GANTT_WIDTH_PX,
+            GANTT_BOTTOM_PX / height_px,
+            (GANTT_WIDTH_PX - GANTT_LEFT_PX - GANTT_RIGHT_PX) / GANTT_WIDTH_PX,
+            plot_px / height_px,
+        ),
+    }
+
+
+def _gantt_rows(
+    records: list[dict],
+    pi_name: str = "",
+    exclude_names: set[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Select and order the timeline's rows. Visual spec 4.1-4.3.
+
+    Rows are strata A and B: everyone who holds a first-author slot, plus
+    everyone who appears twice or more, minus anyone who ever held the
+    last-author slot. That is the population the profile report's aggregates are
+    already computed over, so the picture and the numbers finally describe the
+    same people. Strata C and D are counted and returned rather than drawn, so
+    the figure can declare on its own face who is missing from it.
+
+    Note the edge case the stratum rule creates and a plain "appears twice"
+    filter would not: one appearance in the first-author slot is stratum A and
+    gets a row, while one appearance in the last-author slot is stratum D and
+    does not. `_stratum` tests last-author first.
+
+    Ordering is (first appearance date, name), matching `roles.build_people`.
+    The previous secondary key `-len(appearances)` ranked people by output
+    within a shared first date, which is a ranking of people (spec R5).
+
+    Two limits are inherent to this input and are printed on the chart rather
+    than hidden. People are keyed by exact name string, because
+    `build_author_records` keeps only `name` — the profile report merges "Smith
+    J" and "Smith JA" through ORCID and loose keying, and this renderer cannot.
+    And `is_first` here is bare index 0, without the collective-name guard
+    `roles.build_people` applies.
+    """
+    # Lazy: profile.roles imports `_date_iso` from this module, so a top-level
+    # import would be circular. Shared rather than copied because a second
+    # implementation of the stratum rule is a second thing to drift.
+    from pubmed_toolkit.profile.roles import _stratum
+
+    # Case-insensitive, matching `build_people`'s exclusion. A case mismatch
+    # otherwise reinstates on the chart someone the report's numbers exclude.
+    exclude = {str(name).strip().lower() for name in (exclude_names or ())}
+    exclude |= {str(pi_name).strip().lower(), ""}
+
+    people: dict[str, dict[str, Any]] = {}
+    corpus_years: list[int] = []
+    n_undated = 0
+
+    for rec in records:
+        pubdate = str(rec.get("pubdate", ""))
+        head = pubdate[:4]
+        year = int(head) if head.isdigit() else 0
+        # `_date_iso` falls back to 1900 when it finds no year at all. Keeping
+        # such a record would stretch the axis over a century of empty columns
+        # to place marks on a date nobody published on.
+        if year <= 1900:
+            n_undated += 1
+            continue
+        corpus_years.append(year)
+        for author in rec.get("authors", []):
+            name = str(author.get("name", "")).strip()
+            if not name or name.lower() in exclude:
+                continue
+            person = people.setdefault(name, {
+                "name": name,
+                "first_date": pubdate,
+                "years": set(),
+                "lead_years": set(),
+                "equal_years": set(),
+                "n_appearances": 0,
+                "n_first_slots": 0,
+                "n_last_slots": 0,
+            })
+            person["first_date"] = min(person["first_date"], pubdate)
+            person["n_appearances"] += 1
+            person["years"].add(year)
+            if author.get("is_first"):
+                person["n_first_slots"] += 1
+                person["lead_years"].add(year)
+            if author.get("is_last"):
+                person["n_last_slots"] += 1
+            if author.get("equal_contrib"):
+                person["equal_years"].add(year)
+
+    window_start = min(corpus_years) if corpus_years else 0
+    window_end = max(corpus_years) if corpus_years else 0
+
+    rows: list[dict[str, Any]] = []
+    omitted: Counter[str] = Counter()
+    for person in people.values():
+        stratum = _stratum(person["n_last_slots"], person["n_first_slots"], person["n_appearances"])
+        if stratum not in ("A", "B"):
+            omitted[stratum] += 1
+            continue
+        first_year, last_year = min(person["years"]), max(person["years"])
+        rows.append({
+            "name": person["name"],
+            "stratum": stratum,
+            "first_date": person["first_date"],
+            "n_appearances": person["n_appearances"],
+            "years": sorted(person["years"]),
+            "lead_years": sorted(person["lead_years"]),
+            "equal_years": sorted(person["equal_years"]),
+            "first_year": first_year,
+            "last_year": last_year,
+            # The window is the corpus itself: this renderer has no search
+            # window to read. Same comparison `build_people` makes, so someone
+            # publishing at the edge of the record is marked as still going
+            # rather than as departed.
+            "left_censored": first_year <= window_start,
+            "right_censored": last_year >= window_end - 1,
+        })
+
+    rows.sort(key=lambda row: (row["first_date"], row["name"]))
+    return {
+        "rows": rows,
+        "omitted": {"C": omitted["C"], "D": omitted["D"]},
+        "n_people": len(people),
+        "n_undated_records": n_undated,
+        "window": (window_start, window_end),
+    }
+
+
+def _gantt_face_text(layout: dict[str, Any]) -> list[str]:
+    """
+    The lines that state, on the chart itself, who is not on it and why.
+
+    A selection rule that lives only in the surrounding prose is gone the moment
+    the figure is screenshotted and forwarded — and here the rule removes most
+    of the roster. Exactly three lines: the chrome budget in `_gantt_geometry`
+    has room for three and no more.
+    """
+    omitted = layout["omitted"]
+    plotted, total = len(layout["rows"]), layout["n_people"]
+    not_plotted = (
+        f"Not plotted: {omitted['C']} appear once and hold no first- or last-author slot; "
+        f"{omitted['D']} hold a last-author slot at least once (senior collaborators, not a peer group). "
+        "Every name is in _author_paper_matrix.csv."
+    )
+    if layout["n_undated_records"]:
+        not_plotted += f" {layout['n_undated_records']} records carry no usable year and are on no axis."
+    return [
+        f"{plotted} of {total} co-authors plotted — everyone who holds a first-author slot, plus "
+        "everyone appearing twice or more, minus anyone who ever held the last-author slot.",
+        not_plotted,
+        "Grouped by exact name string, so one person written two ways counts twice. "
+        "The PI and every configured exclude_names entry are never rows.",
+    ]
+
+
 def render_gantt(
     author_records_path: str,
     output_dir: str,
@@ -299,7 +485,13 @@ def render_gantt(
     exclude_names: set[str] | None = None,
 ) -> str | None:
     """
-    Draw the activity timeline.
+    Draw the recurring-co-author activity timeline. Visual spec 4.1-4.5.
+
+    One row per stratum-A/B person, ordered by first appearance then name, at a
+    fixed 24 px pitch; strata C and D are counted on the chart face instead of
+    given rows. Marks are per calendar year, not per record, because
+    `_date_iso` fabricates `month=1, day=1` whenever PubMed omits the month —
+    the old date axis turned that fabrication into visible January clusters.
 
     `exclude_names` drops co-authors who would otherwise crowd the chart — a
     co-PI, a department head, a standing collaborator. It is a parameter rather
@@ -307,70 +499,128 @@ def render_gantt(
     people from one specific lab, which then shipped in a public repository.
     Configure it per run via `advisor.exclude_names`; see
     profile.roles.default_gantt_exclude_names.
+
+    Returns None when no one qualifies for a row: an axis drawn over zero rows
+    states "nobody recurs here" in the visual grammar of a chart, and the caller
+    should say it in prose instead.
     """
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
 
+    # Single-sourced so the chart and the report's roster table cannot disagree
+    # about what a stratum is called. Lazy for the same cycle as in _gantt_rows.
+    from pubmed_toolkit.profile.report import STRATUM_LABEL
+
     with open(author_records_path, encoding="utf-8") as f:
         records = json.load(f)
-    records.sort(key=lambda r: r.get("pubdate", ""))
 
-    exclude = {pi_name, ""} | set(exclude_names or ())
-    appearances = defaultdict(list)
-    for rec in records:
-        date = datetime.strptime(rec["pubdate"], "%Y-%m-%d")
-        for author in rec.get("authors", []):
-            name = author.get("name", "")
-            if name in exclude:
-                continue
-            appearances[name].append({
-                "date": date,
-                "pmid": rec["pmid"],
-                "first": bool(author.get("is_first")),
-                "cofirst": bool(author.get("equal_contrib")),
-            })
-    if not appearances:
+    layout = _gantt_rows(records, pi_name, exclude_names)
+    rows = layout["rows"]
+    if not rows:
         return None
 
-    students = sorted(appearances.keys(), key=lambda n: (appearances[n][0]["date"], -len(appearances[n])))
-    fig, ax = plt.subplots(figsize=(13, max(5, 0.5 * len(students))))
-    colors = {"first": "#d62728", "cofirst": "#ff7f0e", "mid": "#1f77b4"}
-    for idx, student in enumerate(students):
-        apps = sorted(appearances[student], key=lambda item: item["date"])
-        d0, d1 = apps[0]["date"], apps[-1]["date"]
-        if d0 != d1:
-            ax.hlines(idx, d0, d1, color="#bbbbbb", lw=2, zorder=1)
-        for app in apps:
-            if app["first"]:
-                color, marker, size = colors["first"], "*", 240
-            elif app["cofirst"]:
-                color, marker, size = colors["cofirst"], "D", 90
-            else:
-                color, marker, size = colors["mid"], "o", 60
-            ax.scatter(app["date"], idx, color=color, marker=marker, s=size, zorder=3, edgecolor="white", linewidth=0.6)
+    geom = _gantt_geometry(len(rows))
+    window_start, window_end = layout["window"]
+    height_px = geom["height_px"]
 
-    ax.set_yticks(range(len(students)))
-    ax.set_yticklabels([f"{s} (n={len(appearances[s])})" for s in students])
-    ax.invert_yaxis()
-    ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 7]))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
-    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
-    ax.grid(True, axis="x", alpha=0.25, ls="--")
-    ax.set_xlabel("Publication date")
-    ax.set_title(f"{pi_name or 'PI'} lab — student activity span")
-    ax.legend(handles=[
-        Line2D([0], [0], marker="*", color="w", markerfacecolor=colors["first"], markersize=14, label="first author"),
-        Line2D([0], [0], marker="D", color="w", markerfacecolor=colors["cofirst"], markersize=9, label="co-first"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["mid"], markersize=8, label="middle / other"),
-        Line2D([0], [0], color="#bbbbbb", lw=2, label="active span"),
-    ], loc="lower right", framealpha=0.95)
-    plt.tight_layout()
+    fig = plt.figure(figsize=geom["figsize"], dpi=geom["dpi"])
+    ax = fig.add_axes(geom["rect"])
+
+    colors = {"first": "#d62728", "cofirst": "#ff7f0e", "mid": "#1f77b4"}
+    marks: dict[str, list[tuple[int, int]]] = {"first": [], "cofirst": [], "mid": []}
+    spans: list[tuple[int, int, int]] = []
+    tails: dict[str, list[tuple[int, float, int]]] = {"left": [], "right": []}
+
+    for idx, row in enumerate(rows):
+        for year in row["years"]:
+            if year in row["lead_years"]:
+                marks["first"].append((year, idx))
+            elif year in row["equal_years"]:
+                marks["cofirst"].append((year, idx))
+            else:
+                marks["mid"].append((year, idx))
+        if row["last_year"] > row["first_year"]:
+            spans.append((idx, row["first_year"], row["last_year"]))
+        if row["left_censored"]:
+            tails["left"].append((row["first_year"], window_start - 0.75, idx))
+        if row["right_censored"]:
+            tails["right"].append((row["last_year"], window_end + 0.75, idx))
+
+    if spans:
+        ax.hlines([s[0] for s in spans], [s[1] for s in spans], [s[2] for s in spans],
+                  color="#bbbbbb", lw=1.4, zorder=1)
+    # Dashed tail plus a hollow arrowhead, so a censored observation differs from
+    # a completed one in shape and not only in colour: someone still publishing
+    # at the edge of the record has not been shown to have left.
+    for key, marker in (("left", "<"), ("right", ">")):
+        items = tails[key]
+        if not items:
+            continue
+        ax.hlines([i[2] for i in items], [i[0] for i in items], [i[1] for i in items],
+                  color="#8c8c8c", lw=1.0, linestyles="dashed", zorder=2)
+        ax.scatter([i[1] for i in items], [i[2] for i in items], marker=marker,
+                   facecolors="none", edgecolors="#8c8c8c", s=34, linewidth=0.9, zorder=3)
+    for key, marker, size in (("mid", "o", 34), ("cofirst", "D", 40), ("first", "*", 110)):
+        points = marks[key]
+        if points:
+            ax.scatter([p[0] for p in points], [p[1] for p in points], marker=marker,
+                       color=colors[key], s=size, zorder=4, edgecolor="white", linewidth=0.5)
+
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels(
+        [f"{row['name']} — n={row['n_appearances']} records — {STRATUM_LABEL[row['stratum']]}"
+         for row in rows],
+        fontsize=7,
+    )
+    # Inverted rather than sorted downward, so the earliest arrival is at the top
+    # and the arrival cascade reads left-to-right, top-to-bottom.
+    ax.set_ylim(len(rows) - 0.5, -0.5)
+    ax.tick_params(axis="y", length=0)
+
+    span_years = window_end - window_start + 1
+    # Thin the labels on long corpora; the ticks stay integer years either way.
+    step = max(1, -(-span_years // 28))
+    ax.set_xticks(range(window_start, window_end + 1, step))
+    ax.set_xlim(window_start - 1.1, window_end + 1.1)
+    ax.tick_params(axis="x", labelsize=7)
+    ax.grid(True, axis="x", alpha=0.25, ls="--", lw=0.6)
+    ax.set_xlabel(
+        "Publication year — integer only: the month in `pubdate` is fabricated when PubMed omits it",
+        fontsize=7,
+    )
+
+    fig.text(6 / GANTT_WIDTH_PX, 1 - 16 / height_px,
+             f"{pi_name or 'PI'} lab — recurring co-authors, observed publication years",
+             fontsize=10, fontweight="bold", va="top", ha="left")
+    fig.text(6 / GANTT_WIDTH_PX, 1 - 32 / height_px, "\n".join(_gantt_face_text(layout)),
+             fontsize=6.5, va="top", ha="left", color="#333333", linespacing=1.4)
+
+    # In the chrome, not inside the axes. A legend box floating over the plot
+    # hides whichever rows sit under it, and at `loc="lower right"` those are the
+    # most recent marks of the most recently arrived people.
+    fig.legend(handles=[
+        Line2D([0], [0], marker="*", color="w", markerfacecolor=colors["first"], markersize=9,
+               label="year with a first-author record"),
+        # Not "co-first": `equal_contrib` is position-blind, so shared *senior*
+        # authorship was being labelled as shared first authorship.
+        Line2D([0], [0], marker="D", color="w", markerfacecolor=colors["cofirst"], markersize=5,
+               label="year with an equal-contribution flag (position-blind)"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=colors["mid"], markersize=5,
+               label="year with other records"),
+        Line2D([0], [0], color="#bbbbbb", lw=1.4,
+               label="first-to-last interval, not presence in the lab"),
+        Line2D([0], [0], color="#8c8c8c", lw=1.0, ls="--", marker=">", markerfacecolor="none",
+               markeredgecolor="#8c8c8c", markersize=5,
+               label="record continues to the window edge (censored)"),
+    ], loc="lower center", bbox_to_anchor=(0.5, 2 / height_px), ncol=5, fontsize=6, frameon=False)
+
     out = os.path.join(output_dir, "student_activity_gantt.png")
-    plt.savefig(out, dpi=150, bbox_inches="tight")
-    plt.close()
+    # No bbox_inches="tight": the saved pixel size must equal the computed
+    # geometry, otherwise the height rule is unverifiable.
+    fig.savefig(out, dpi=geom["dpi"])
+    plt.close(fig)
     return out
 
 

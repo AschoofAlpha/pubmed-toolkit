@@ -87,6 +87,12 @@ def person_roster(people: Sequence[dict[str, Any]], n_strict: int, n_loose: int)
             "left_censored": person["left_censored"],
             "right_censored": person["right_censored"],
             "flags": list(person["flags"]),
+            # Per-appearance detail, so a row is self-describing: the timeline can be
+            # drawn, and its row order asserted, from the roster alone without reaching
+            # back into `build_people`. Additive — no existing key changes.
+            "years": list(person["years"]),
+            "lead_years": list(person["lead_years"]),
+            "first_date": person["first_date"],
         }
         for person in people
     ]

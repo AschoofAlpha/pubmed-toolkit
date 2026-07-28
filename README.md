@@ -77,15 +77,19 @@ git clone https://github.com/AschoofAlpha/pubmed-toolkit.git
 cd pubmed-toolkit
 
 pip install -e ".[fetch]"         # profile + fetch: PDF download and identity validation
-pip install -e ".[analysis]"      # + the activity timeline PNG (matplotlib)
+pip install -e ".[analysis]"      # + the `analyze` subcommand's raster charts (matplotlib)
 pip install -e .                  # verify only — no third-party dependencies
 ```
 
 Python 3.10+. Not published on PyPI; install from source.
 
-`profile` itself needs nothing beyond the standard library once a corpus exists
-— matplotlib is used for the timeline image only, and its absence skips the PNG
-with a warning while the rest of the report is produced as normal.
+`profile` needs nothing beyond the standard library once a corpus exists,
+including its figures: every chart in the HTML report is an SVG string generated
+in Python and written into the file. **matplotlib is not used by `profile` at
+all.** It is needed only by `analyze`, which draws PNGs. If the drawing module
+cannot be imported for any reason, each figure slot is replaced by a stated
+`chart unavailable — <package> not installed` placeholder and the rest of the
+report — every section, every table, every caveat — is written as normal.
 
 PyMuPDF is deliberately *not* a hard dependency: it is AGPL-3.0, this project is
 MIT, and an MIT package should not pull copyleft into your environment without
@@ -101,8 +105,17 @@ python -m pubmed_toolkit fetch --config config.json --no-download
 python -m pubmed_toolkit profile --config config.json
 ```
 
-Writes `advisor_profile_<timestamp>.md` and `.json` to the output directory,
-plus `student_activity_gantt.png` if matplotlib is installed.
+Three files land in the output directory, sharing one timestamp:
+
+| File | Role |
+| --- | --- |
+| `advisor_profile_<timestamp>.html` | **The report you read.** Every section, five inline figures, every caveat, the whole roster |
+| `advisor_profile_<timestamp>.md` | The same sections as plain text, for diffing, grepping and pasting into notes |
+| `advisor_profile_<timestamp>.json` | The same numbers without the prose, for anything programmatic |
+
+The Markdown and the JSON are unchanged in content. The HTML is the primary
+output because two things do not fit in Markdown: a figure, and 277 rows that a
+reader needs to be able to collapse.
 
 ```bash
 --config PATH          # identity and advisor settings
@@ -112,7 +125,47 @@ plus `student_activity_gantt.png` if matplotlib is installed.
 --log-level LEVEL
 ```
 
-Exit code 1 when the report is refused (see [Gates](#gates)), 0 otherwise.
+Exit code 1 when the report is refused (see [Gates](#gates)), 0 otherwise. A
+refused run still writes all three files; each contains the gate, the observed
+values and nothing else.
+
+### The HTML report
+
+One file, no network. Opening it from a `file://` URL with the network cable
+unplugged renders exactly what it renders online: the fonts are system fonts,
+the figures are inline SVG, and the only URI anywhere in the document is the
+SVG XML namespace, which no browser fetches. It is safe to keep on a laptop or
+a thumb drive, which matters, because it is personal data about named people.
+
+Five figures, one per section that earns one:
+
+| Figure | Section | What it shows |
+| --- | --- | --- |
+| Person activity timeline | 2 | One row per person in the cohort every aggregate is computed over: everyone with two or more records who never holds the senior slot. Filled square = a year with a first-author record, hollow = a year with records but none in that slot, dashed tail = censored at the window edge |
+| Time to a first-author slot | 4 | Two strips on one axis — people who reached one above it, people who have not yet below it. The lower strip is not optional: the upper one alone reads as a promise |
+| Observed activity span | 5 | Four lanes by censoring state, so a span truncated by the search window is never mistaken for a short one |
+| Records per year | 9 | One column per year in the window, including zero-count years, with partial and indexing-lag bins hatched and labelled |
+| Team size | 10 | Authors per record, and separately the records led by a lead-trainee or support candidate |
+
+Text in a figure is real `<text>`: Ctrl+F reaches a person's name inside the
+timeline, and a screen reader reads it. Every figure states its own denominator
+inside the SVG as well as in the caption, because a chart gets screenshotted and
+separated from its caption. Every figure carries its caveats verbatim beneath
+it, never behind a disclosure.
+
+**What the page does not do.** No figure ranks anyone. Nothing on the page is
+sortable by appearances, lead slots or equal-contribution flags — the roster's
+order control offers name and year only, and no count option exists to click,
+because one click on `appearances` would turn the roster into a productivity
+leaderboard. There is no colour ramp, no threshold band, no red or green, no
+"good" region: any shading that separates better from worse is a grade. No
+percent sign appears in any figure at any sample size. Below a metric's floor
+the median is replaced by a plate stating the actual n and the floor it needed,
+and every underlying dot stays — an empty axis reads as a measured zero.
+
+The single-appearance people who have no row on the timeline are not hidden:
+they are counted in a per-year strip along its foot, named in the roster table,
+and stated in the figure's own caption.
 
 ### What is in the report
 
@@ -235,7 +288,10 @@ python -m pubmed_toolkit clean-cache --max-age-days 30
 
 `analyze` predates `profile` and overlaps with it. It applies no sample-size
 floors and attaches no caveats, so prefer `profile` for anything you intend to
-act on.
+act on. Its gantt PNG is the only raster this project draws and the only place
+matplotlib is used; it keys people by exact name string, where `profile` keys
+them by ORCID and affiliation evidence, so the two timelines will not agree on
+who is who.
 
 ---
 
@@ -348,15 +404,19 @@ and NCBI both ask for one and may throttle anonymous traffic.
 
 ## Tests
 
-553 assertions, all offline — every canonical record is a synthetic fixture, so
+1067 assertions, all offline — every canonical record is a synthetic fixture, so
 the suite never depends on CrossRef or NCBI being reachable. Plain scripts, no
 pytest.
 
 ```bash
+python tests/test_charts.py             # 304 — every figure, drawn and suppressed, at every degenerate n
 python tests/test_profile.py            # 226 — gates, strata, every metric, suppression floors
+python tests/test_html_report.py        #  98 — page structure, escaping, what is never collapsed
 python tests/test_verify_regressions.py #  96 — every bug found in review or live use
 python tests/test_verify.py             #  71 — normalisation, cross-check, BibTeX
+python tests/test_gantt.py              #  62 — the analyze timeline: rows, ordering, figure height
 python tests/test_bibtex_pmid_sources.py #  50 — where a PMID may legitimately hide in a .bib
+python tests/test_cli_profile.py        #  50 — what the subcommand writes to disk, end to end
 python tests/test_name_matching.py      #  45 — surname vs initials, CJK names
 python tests/test_pubmed_parse.py       #  35 — XML parsing edge cases
 python tests/test_search_query.py       #  21 — PubMed query construction

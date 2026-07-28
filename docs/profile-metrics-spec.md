@@ -539,8 +539,8 @@ from primary research beyond the title-regex exclusion of Section 6.5.
   rather than an empty list.
 - **Caveats.** CAV-21.
 
-No count of "distinct institutions" is emitted. `Fujian Medical University`,
-`Fujian Med Univ`, and `The First Affiliated Hospital of Fujian Medical University` are
+No count of "distinct institutions" is emitted. `Example Medical University`,
+`Example Med Univ`, and `The First Affiliated Hospital of Example Medical University` are
 three strings for one organisation; counting them measures string variance. A human
 resolves those entities instantly, so the report supplies the strings and stops.
 

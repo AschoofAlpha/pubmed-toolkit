@@ -61,14 +61,18 @@ git clone https://github.com/AschoofAlpha/pubmed-toolkit.git
 cd pubmed-toolkit
 
 pip install -e ".[fetch]"         # profile + fetch：PDF 下载与身份校验
-pip install -e ".[analysis]"      # + 活跃期甘特图 PNG（matplotlib）
+pip install -e ".[analysis]"      # + `analyze` 子命令的位图图表（matplotlib）
 pip install -e .                  # 仅 verify —— 无任何第三方依赖
 ```
 
 需要 Python 3.10+。**未发布到 PyPI**，请从源码安装。
 
-语料就绪之后，`profile` 本身只用标准库——matplotlib 只用于画时间线图，
-缺少它时会告警并跳过 PNG，报告其余部分照常产出。
+语料就绪之后，`profile` 只用标准库，**图表也不例外**：HTML 报告里每一张图
+都是 Python 直接生成、原样写进文件的 SVG 字符串。**`profile` 完全不用
+matplotlib**，只有画 PNG 的 `analyze` 才需要它。万一绘图模块因任何原因
+无法导入，每个图位会替换成一句明确的
+`chart unavailable — <package> not installed` 占位说明，报告其余部分
+（每个小节、每张表、每条告诫）照常写出。
 
 PyMuPDF 刻意不设为硬依赖：它是 AGPL-3.0，而本项目是 MIT——
 一个 MIT 包不该在用户没主动选择的情况下把 copyleft 拉进其环境。
@@ -83,8 +87,16 @@ python -m pubmed_toolkit fetch --config config.json --no-download
 python -m pubmed_toolkit profile --config config.json
 ```
 
-在输出目录下生成 `advisor_profile_<时间戳>.md` 与 `.json`；
-装了 matplotlib 时还会有 `student_activity_gantt.png`。
+输出目录下会落三个文件，共用同一个时间戳：
+
+| 文件 | 作用 |
+| --- | --- |
+| `advisor_profile_<时间戳>.html` | **给人读的那份**：全部小节、5 张内嵌图、全部告诫、完整人员表 |
+| `advisor_profile_<时间戳>.md` | 同样的小节，纯文本，便于 diff、grep、贴进笔记 |
+| `advisor_profile_<时间戳>.json` | 同样的数字，不含叙述文本，供程序读取 |
+
+Markdown 与 JSON 的内容没有变化。HTML 成为主输出，是因为有两样东西塞不进
+Markdown：一张图，以及需要读者能折叠起来的 277 行人员表。
 
 ```bash
 --config PATH          # 身份配置与 advisor 配置
@@ -94,7 +106,40 @@ python -m pubmed_toolkit profile --config config.json
 --log-level LEVEL
 ```
 
-报告被门禁拒绝时退出码为 1（见[门禁](#门禁)），否则为 0。
+报告被门禁拒绝时退出码为 1（见[门禁](#门禁)），否则为 0。被拒绝的运行同样
+写出这三个文件，每份只包含门禁编号、实测值，别无其他。
+
+### HTML 报告
+
+单文件，不联网。拔掉网线、用 `file://` 打开，渲染结果与联网时完全一致：
+字体用系统字体，图表是内嵌 SVG，全文唯一的 URI 是 SVG 的 XML 命名空间，
+浏览器不会去取它。因此它可以安心放在本地硬盘或 U 盘里——这点很重要，
+因为它是关于具名个人的个人数据。
+
+5 张图，每张对应一个值得配图的小节：
+
+| 图 | 小节 | 画的是什么 |
+| --- | --- | --- |
+| 人员活跃期时间线 | 2 | 每行一个人，范围正是所有聚合指标的计算人群：出现两次及以上、且从不占末位的人。实心方块 = 该年有一作记录，空心 = 该年有记录但都不在一作位，虚线尾 = 在检索窗口边界处被截尾 |
+| 拿到第一个一作用了多久 | 4 | 同一坐标轴上下两条带：上面是已经拿到的人，下面是尚未拿到的人。下面那条不可省略——只看上面那条会读成一句承诺 |
+| 可观察到的活跃期 | 5 | 按截尾状态分四条泳道，避免把「被检索窗口切断的长活跃期」误读成「短活跃期」 |
+| 逐年记录数 | 9 | 窗口内每年一列（含计数为 0 的年份），不完整年份与受索引滞后影响的年份带网格填充并附文字标注 |
+| 团队规模 | 10 | 每篇论文的作者数，并单列由 lead-trainee / support candidate 领衔的那部分记录 |
+
+图里的文字是真正的 `<text>`：Ctrl+F 能在时间线里搜到人名，读屏软件也能读出来。
+每张图都在 SVG 内部重复写出自己的分母，而不只写在图注里——图会被截图，
+截图会和图注分家。每张图下方原样附上它的告诫，绝不折叠。
+
+**这个页面不做什么。** 没有任何一张图给人排名。页面上没有任何东西可以按
+出现次数、一作数、共同署名数排序——人员表的排序控件只提供姓名和年份，
+按次数排序这个选项**根本不存在**，因为点一下 `appearances` 就把人员表变成了
+产出排行榜。没有色阶、没有阈值带、没有红绿、没有「好」的区域：任何把「更好」
+和「更差」分开的着色都是在打分。任何样本量下，图里都不出现百分号。
+样本量低于阈值时，中位数被替换成一块写明实际 n 与所需阈值的说明板，
+底层的每一个点仍然保留——空坐标轴会被读成「测出来是零」。
+
+时间线上没有行的「只出现一次」的人并没有被藏起来：他们被计入坐标轴下方的
+逐年计数条，在人员表里列出姓名，数量也写在图注里。
 
 ### 报告里有什么
 
@@ -205,7 +250,9 @@ python -m pubmed_toolkit clean-cache --max-age-days 30
 ```
 
 `analyze` 早于 `profile` 存在，功能上有重叠。它**不设样本量下限、也不附任何告诫**，
-所以凡是你打算据以做决定的场景，请用 `profile`。
+所以凡是你打算据以做决定的场景，请用 `profile`。它的甘特 PNG 是本项目唯一的位图，
+也是唯一用到 matplotlib 的地方；它按姓名字符串精确匹配来归并人员，而 `profile` 用
+ORCID 与机构证据归并，因此两张时间线对「谁是谁」的判断不会一致。
 
 ---
 
@@ -301,14 +348,18 @@ bioRxiv/medRxiv、DOI 直连。
 
 ## 测试
 
-553 条断言，全部离线——权威记录均为合成 fixture，CI 不依赖 CrossRef / NCBI 可达。
+1067 条断言，全部离线——权威记录均为合成 fixture，CI 不依赖 CrossRef / NCBI 可达。
 纯脚本，不用 pytest。
 
 ```bash
+python tests/test_charts.py             # 304 — 每张图的正常态与抑制态，以及每种退化样本量
 python tests/test_profile.py            # 226 — 门禁、分层、每个指标、抑制阈值
+python tests/test_html_report.py        #  98 — 页面结构、转义、哪些内容永不折叠
 python tests/test_verify_regressions.py #  96 — 代码审查与实跑中发现的每一个 bug
 python tests/test_verify.py             #  71 — 归一化、双向反查、BibTeX 解析
+python tests/test_gantt.py              #  62 — analyze 的时间线：行选取、排序、图高
 python tests/test_bibtex_pmid_sources.py #  50 — PMID 可能合法藏在 .bib 的哪些位置
+python tests/test_cli_profile.py        #  50 — 子命令端到端究竟往磁盘写了什么
 python tests/test_name_matching.py      #  45 — 姓氏 vs 缩写、CJK 姓名
 python tests/test_pubmed_parse.py       #  35 — XML 解析边界情况
 python tests/test_search_query.py       #  21 — PubMed 检索式构造

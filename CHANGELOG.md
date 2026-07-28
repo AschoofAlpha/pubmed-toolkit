@@ -4,6 +4,53 @@ Notable changes to pubmed-toolkit. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-27
+
+`profile` now writes a self-contained HTML report as its primary output. The
+Markdown and the JSON are unchanged and still written.
+
+### Added
+
+- **`advisor_profile_<timestamp>.html`**, written beside the `.md` and `.json`.
+  One file, no network: system fonts, inline SVG figures, and the SVG XML
+  namespace as the only URI in the document. Every section, every caveat and
+  every roster row is rendered server-side, so the page is complete with
+  JavaScript disabled and complete on paper.
+- **Five figures** (`profile/charts.py`, `profile/svg.py`): person activity
+  timeline, time to a first-author slot, observed activity span, records per
+  year, team size. Each is a pure metric-dict-to-SVG-string function that states
+  its own denominator inside the SVG, replaces a suppressed aggregate with a
+  plate naming the actual n and the floor, and emits no percent sign at any
+  sample size. None of them ranks anyone.
+- **`person_roster` rows carry `years`, `lead_years` and `first_date`**, and
+  `build_people` people carry `lead_years`. Additive only: no existing key
+  changes name, type or value, `SCHEMA_VERSION` stays at 1, and
+  `tests/test_profile.py` passes unchanged.
+- `tests/test_charts.py` (304), `tests/test_html_report.py` (98),
+  `tests/test_gantt.py` (62) and `tests/test_cli_profile.py` (50).
+
+### Fixed
+
+- **The activity timeline plotted every co-author, at 1934 x 21506 px.** A real
+  run — Stockwell Brent / Columbia, 10 years, 62 papers — drew all 277 people on
+  one axis; 190 of them appear exactly once and rendered as a single dot, and
+  reading the image took about 20 screens of scrolling. The spec already
+  excludes single-appearance people from every aggregate; the chart contradicted
+  it by drawing them anyway. Rows are now the cohort the aggregates are computed
+  over — everyone with two or more records who never holds the senior slot — and
+  everyone else is counted in a per-year strip along the axis foot and named in
+  the roster. Same corpus, same rule: **77 rows at 1100 x 1984 px**.
+- **`analyze`'s gantt ordered people by output** within a shared first-appearance
+  date, and labelled its equal-contribution legend entry "co-first" for a flag
+  that is position-blind. Both corrected; the same corpus now renders at
+  1100 x 1939 px instead of 1934 x 21506.
+
+### Changed
+
+- `profile` no longer writes `student_activity_gantt.png` or any other raster.
+  `analysis.render_gantt` is unchanged in signature and still serves `analyze`.
+  Section 2 of the Markdown names where the timeline is instead of embedding it.
+
 ## [0.2.0] — 2026-07-22
 
 The first release fixed nothing it did not first get wrong. Everything below

@@ -5,9 +5,9 @@ Owns the corpus gates and the section ordering that turns metric dicts into a
 Markdown document plus a JSON record of the same numbers. The caveat strings it
 renders come from `caveats.py` unchanged.
 
-This module does not draw the activity timeline. `analysis.render_gantt` already
-does, correctly; `build_report` takes the path to the PNG it produced and points
-at it.
+This module draws nothing. The activity timeline is an inline SVG in the HTML
+report (`charts.person_timeline_chart`); `build_report` keeps `gantt_path` so a
+caller holding a raster of its own (`analyze`) can still point at one.
 """
 
 from __future__ import annotations
@@ -473,13 +473,13 @@ def _roster_body(roster: dict[str, Any], gantt_path: str | Path | None) -> list[
         ),
     ]
     if gantt_path:
-        lines += [
-            "",
-            f"![Person activity timeline]({Path(gantt_path).name})",
-            f"Timeline rendered by analysis.render_gantt: `{gantt_path}`",
-        ]
+        lines += ["", f"![Person activity timeline]({Path(gantt_path).name})",
+                  f"Timeline rendered by analysis.render_gantt: `{gantt_path}`"]
     else:
-        lines += ["", "No activity timeline image was supplied to the renderer."]
+        # Markdown cannot hold an inline SVG; an unexplained absence would be worse.
+        lines += ["", "The activity timeline is drawn in the HTML report beside this file "
+                  "(`advisor_profile_*.html`, Section 2), one row per person in the cohort "
+                  "every aggregate below is computed over."]
     return lines
 
 

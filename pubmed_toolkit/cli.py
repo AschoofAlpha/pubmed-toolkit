@@ -373,37 +373,49 @@ def _profile_corpus(papers: list[dict], cfg: dict) -> dict:
     }
 
 
-def _render_timeline(papers: list[dict], output_dir: str, cfg: dict, logger: logging.Logger) -> str | None:
-    """Draw the activity timeline with the existing renderer, or say why there is none."""
-    from pubmed_toolkit.analysis import build_author_records, render_gantt
-    from pubmed_toolkit.profile import default_gantt_exclude_names
+def _figure_placeholders(missing: str) -> dict[str, dict]:
+    """One stated placeholder per figure slot, naming the package that is absent.
 
-    # `papers` goes in twice: build_author_records reads title and pub_date from
-    # the first argument and the structured author list from the second, and here
-    # both come from the same records.
-    records_path = build_author_records(papers, papers, output_dir)
+    The ids come from the HTML builder's own placement table rather than from a
+    list retyped here, so a figure can never lose its slot to a spelling drift.
+    Shape matches `charts._prose`: the message travels in `caption` with an empty
+    `svg` and `drawn` false, which is the same degenerate path the chart module
+    uses for a figure it declines to draw. An empty axis is never emitted.
+    """
+    from pubmed_toolkit.profile.html_report import FIGURE_PLACEMENT
+
+    note = f"chart unavailable — {missing} not installed"
+    return {
+        figure_id: {"id": figure_id, "svg": "", "caption": note, "desc": note,
+                    "rows": [], "drawn": False}
+        for figure_id, _section, _caveats in FIGURE_PLACEMENT
+    }
+
+
+def _profile_figures(report: dict, logger: logging.Logger) -> dict[str, dict]:
+    """The report's figures, or placeholders if the drawing module will not import.
+
+    `profile.charts` emits SVG from the standard library alone, so on any working
+    install this returns real figures and the guard costs nothing. It exists
+    because a drawing dependency is not worth the report: without it an
+    ImportError here would take the HTML, and the reader would lose fourteen
+    sections of prose over five pictures.
+    """
     try:
-        pi_name = cfg.get("author_name", "")
-        return render_gantt(
-            records_path, output_dir, pi_name,
-            exclude_names=default_gantt_exclude_names(pi_name, cfg.get("advisor")),
-        )
-    except ImportError:
+        from pubmed_toolkit.profile.charts import figures_for_report
+    except ImportError as exc:
+        missing = exc.name or "a drawing dependency"
         logger.warning(
-            "matplotlib 不可用，活跃期甘特图已跳过，报告其余部分照常生成"
-            "（执行 `pip install -e \".[analysis]\"` 可恢复）。"
+            "%s 不可用，HTML 报告的图表位改为占位说明，其余章节照常生成"
+            "（执行 `pip install -e \".[analysis]\"` 可恢复）。", missing
         )
-        return None
+        return _figure_placeholders(missing)
+    return figures_for_report(report)
 
 
 def _build_profile_report(json_path: str, cfg: dict, output_dir: str, logger: logging.Logger) -> dict | None:
     """Turn the input file into a report dict. None means the input is unusable."""
-    from pubmed_toolkit.profile import (
-        build_report,
-        build_report_from_path,
-        check_corpus_gates,
-        check_source_path,
-    )
+    from pubmed_toolkit.profile import build_report, build_report_from_path, check_source_path
 
     # The spreadsheet refusal is decided on the extension alone so the file is
     # never opened; build_report_from_path is the entry point that does that.
@@ -426,12 +438,12 @@ def _build_profile_report(json_path: str, cfg: dict, output_dir: str, logger: lo
         logger.error("输入 JSON 既不是论文列表也不是语料对象，或者是空的: %s", json_path)
         return None
 
-    # Gates first: a refused report must not leave behind a timeline PNG that
-    # nothing references.
-    gantt_path = None
-    if check_corpus_gates(corpus) is None:
-        gantt_path = _render_timeline(corpus["papers"], output_dir, cfg, logger)
-    return build_report(corpus, cfg, gantt_path)
+    # No `gantt_path`: the timeline is now the HTML report's inline SVG, drawn over
+    # the cohort the report's own aggregates are computed over. The PNG plotted all
+    # 277 co-authors of a real corpus on one axis at 1934x21506 px, contradicting the
+    # spec that excludes single-appearance people from every aggregate.
+    # `analysis.render_gantt` is unchanged and still serves the `analyze` command.
+    return build_report(corpus, cfg)
 
 
 def cmd_profile(argv: list[str]):
@@ -446,7 +458,7 @@ def cmd_profile(argv: list[str]):
     logger = logging.getLogger("pubmed_toolkit.profile")
 
     from pubmed_toolkit.analysis import find_latest_json
-    from pubmed_toolkit.profile import write_report
+    from pubmed_toolkit.profile import write_html, write_report
 
     json_path = args.papers_json or find_latest_json(output_dir)
     if not json_path or not os.path.exists(json_path):
@@ -464,6 +476,11 @@ def cmd_profile(argv: list[str]):
         return 1
 
     paths = write_report(report, output_dir)
+    # A refused report draws nothing: every number a figure would carry is wrong by
+    # an unbounded amount once a gate fires, so the page states the gate instead.
+    figures = {} if report["refused"] else _profile_figures(report, logger)
+    html_path = write_html(report, output_dir, figures)
+
     if report["refused"]:
         gate = report["gate"]
         logger.error("门禁 %s (%s) 拒绝出报告：%s", gate["id"], gate["name"], gate["message"])
@@ -471,9 +488,11 @@ def cmd_profile(argv: list[str]):
         prov = report["provenance"]
         logger.info("语料 %d 篇 / 人员 %d 位（严格键 %d、宽松键 %d，两者之差即人员计数的误差范围）",
                     prov["corpus_size"], prov["n_people"], prov["n_strict"], prov["n_loose"])
-        if report["gantt_path"]:
-            logger.info("活跃期甘特图: %s", report["gantt_path"])
-    logger.info("画像报告: %s | %s", paths["markdown"], paths["json"])
+        drawn = sum(1 for figure in figures.values() if figure.get("drawn"))
+        logger.info("图表 %d/%d 已绘制，其余以说明文字代替（样本量不足或无可绘制的行）",
+                    drawn, len(figures))
+    logger.info("画像报告（主）: %s", html_path)
+    logger.info("画像报告（备）: %s | %s", paths["markdown"], paths["json"])
     return report["exit_code"]
 
 

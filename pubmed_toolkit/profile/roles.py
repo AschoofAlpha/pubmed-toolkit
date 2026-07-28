@@ -509,6 +509,10 @@ def build_people(
             "first_year": first_year,
             "last_year": last_year,
             "years": sorted(set(years)),
+            # Which of this person's years hold a first-author record. The timeline
+            # figure needs the years, not the PMIDs: one mark covers a whole year, so
+            # a per-mark PMID would not be well defined.
+            "lead_years": sorted({entry["year"] for entry in first_slots}),
             "first_date": entries[0]["date_iso"],
             "span_years": last_year - first_year,
             "left_censored": first_year <= window_start_year,
